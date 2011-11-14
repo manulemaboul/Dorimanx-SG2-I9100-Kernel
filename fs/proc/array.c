@@ -219,7 +219,7 @@ static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 	for (g = 0; g < min(group_info->ngroups, NGROUPS_SMALL); g++)
 #endif
 		seq_printf(m, "%d ",
-			from_kgid_munged(user_ns, GROUP_AT(group_info, g)));
+			   from_kgid_munged(user_ns, GROUP_AT(group_info, g)));
 	put_cred(cred);
 
 	seq_putc(m, '\n');
