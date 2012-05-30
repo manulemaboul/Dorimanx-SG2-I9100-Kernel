@@ -1192,7 +1192,11 @@ static int smack_mmap_file(struct file *file,
 	int tmay;
 	int rc;
 
+<<<<<<< HEAD
 	if (file == NULL)
+=======
+	if (file == NULL || file->f_dentry == NULL)
+>>>>>>> e546785... split ->file_mmap() into ->mmap_addr()/->mmap_file()
 		return 0;
 
 	isp = file_inode(file)->i_security;
