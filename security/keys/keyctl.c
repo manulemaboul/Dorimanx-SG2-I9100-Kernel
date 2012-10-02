@@ -1527,9 +1527,9 @@ long keyctl_session_to_parent(void)
 		goto unlock;
 
 	/* the keyrings must have the same UID */
-	if ((pcred->tgcred->session_keyring &&
-	     !uid_eq(pcred->tgcred->session_keyring->uid, mycred->euid)) ||
-	    !uid_eq(mycred->tgcred->session_keyring->uid, mycred->euid))
+	if ((pcred->session_keyring &&
+	     !uid_eq(pcred->session_keyring->uid, mycred->euid)) ||
+	    !uid_eq(mycred->session_keyring->uid, mycred->euid))
 		goto unlock;
 
 	/* cancel an already pending keyring replacement */
