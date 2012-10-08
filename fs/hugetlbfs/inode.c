@@ -110,7 +110,11 @@ static int hugetlbfs_file_mmap(struct file *file, struct vm_area_struct *vma)
 	 * way when do_mmap_pgoff unwinds (may be important on powerpc
 	 * and ia64).
 	 */
+<<<<<<< HEAD
 	vma->vm_flags |= VM_HUGETLB | VM_DONTEXPAND;
+=======
+	vma->vm_flags |= VM_HUGETLB | VM_DONTEXPAND | VM_DONTDUMP;
+>>>>>>> 314e51b... mm: kill vma flag VM_RESERVED and mm->reserved_vm counter
 	vma->vm_ops = &hugetlb_vm_ops;
 
 	if (vma->vm_pgoff & (~huge_page_mask(h) >> PAGE_SHIFT))
