@@ -372,10 +372,9 @@ void kernel_restart(char *cmd)
 		pm_power_off_prepare();
 	disable_nonboot_cpus();
 	syscore_shutdown();
-
 	if (!cmd)
 		printk(KERN_EMERG "Restarting system.\n");
-	else{
+	else {
 		printk(KERN_EMERG "Restarting system with command '%s'.\n", cmd);
 		printk(KERN_EMERG "pid = %d name:%s\n", task_tgid_vnr(current), current->comm);
 	}
@@ -678,7 +677,6 @@ static int set_user(struct cred *new)
 
 	free_uid(new->user);
 	new->user = new_user;
-	sched_autogroup_create_attach(current);
 	return 0;
 }
 
@@ -1254,6 +1252,7 @@ out:
 	write_unlock_irq(&tasklist_lock);
 	if (err > 0) {
 		proc_sid_connector(group_leader);
+		sched_autogroup_create_attach(group_leader);
 	}
 	return err;
 }
@@ -1800,14 +1799,14 @@ SYSCALL_DEFINE1(umask, int, mask)
 static int prctl_set_mm_exe_file(struct mm_struct *mm, unsigned int fd)
 {
 	struct file *exe_file;
-	struct dentry *dentry;
+	struct inode *inode;
 	int err, fput_needed;
 
 	exe_file = fget_light(fd, &fput_needed);
 	if (!exe_file)
 		return -EBADF;
 
-	dentry = exe_file->f_path.dentry;
+	inode = file_inode(exe.file);
 
 	/*
 	 * Because the original mm->exe_file points to executable file, make
@@ -1815,11 +1814,11 @@ static int prctl_set_mm_exe_file(struct mm_struct *mm, unsigned int fd)
 	 * overall picture.
 	 */
 	err = -EACCES;
-	if (!S_ISREG(dentry->d_inode->i_mode)	||
+	if (!S_ISREG(inode->i_mode)	||
 	    exe_file->f_path.mnt->mnt_flags & MNT_NOEXEC)
 		goto exit;
 
-	err = inode_permission(dentry->d_inode, MAY_EXEC);
+	err = inode_permission(inode, MAY_EXEC);
 	if (err)
 		goto exit;
 
@@ -2020,163 +2019,159 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 
 	error = 0;
 	switch (option) {
-		case PR_SET_PDEATHSIG:
-			if (!valid_signal(arg2)) {
-				error = -EINVAL;
-				break;
-			}
-			me->pdeath_signal = arg2;
-			break;
-		case PR_GET_PDEATHSIG:
-			error = put_user(me->pdeath_signal, (int __user *)arg2);
-			break;
-		case PR_GET_DUMPABLE:
-			error = get_dumpable(me->mm);
-			break;
-		case PR_SET_DUMPABLE:
-			if (arg2 != SUID_DUMP_DISABLE &&
-			    arg2 != SUID_DUMP_USER) {
-				error = -EINVAL;
-				break;
-			}
-			set_dumpable(me->mm, arg2);
-			break;
-
-		case PR_SET_UNALIGN:
-			error = SET_UNALIGN_CTL(me, arg2);
-			break;
-		case PR_GET_UNALIGN:
-			error = GET_UNALIGN_CTL(me, arg2);
-			break;
-		case PR_SET_FPEMU:
-			error = SET_FPEMU_CTL(me, arg2);
-			break;
-		case PR_GET_FPEMU:
-			error = GET_FPEMU_CTL(me, arg2);
-			break;
-		case PR_SET_FPEXC:
-			error = SET_FPEXC_CTL(me, arg2);
-			break;
-		case PR_GET_FPEXC:
-			error = GET_FPEXC_CTL(me, arg2);
-			break;
-		case PR_GET_TIMING:
-			error = PR_TIMING_STATISTICAL;
-			break;
-		case PR_SET_TIMING:
-			if (arg2 != PR_TIMING_STATISTICAL)
-				error = -EINVAL;
-			break;
-		case PR_SET_NAME:
-			comm[sizeof(me->comm)-1] = 0;
-			if (strncpy_from_user(comm, (char __user *)arg2,
-					      sizeof(me->comm) - 1) < 0)
-				return -EFAULT;
-			set_task_comm(me, comm);
-			break;
-		case PR_GET_NAME:
-			get_task_comm(comm, me);
-			if (copy_to_user((char __user *)arg2, comm,
-					 sizeof(comm)))
-				return -EFAULT;
-			break;
-		case PR_GET_ENDIAN:
-			error = GET_ENDIAN(me, arg2);
-			break;
-		case PR_SET_ENDIAN:
-			error = SET_ENDIAN(me, arg2);
-			break;
-		case PR_GET_SECCOMP:
-			error = prctl_get_seccomp();
-			break;
-		case PR_SET_SECCOMP:
-			error = prctl_set_seccomp(arg2, (char __user *)arg3);
-			break;
-		case PR_GET_TSC:
-			error = GET_TSC_CTL(arg2);
-			break;
-		case PR_SET_TSC:
-			error = SET_TSC_CTL(arg2);
-			break;
-		case PR_TASK_PERF_EVENTS_DISABLE:
-			error = perf_event_task_disable();
-			break;
-		case PR_TASK_PERF_EVENTS_ENABLE:
-			error = perf_event_task_enable();
-			break;
-		case PR_GET_TIMERSLACK:
-			error = current->timer_slack_ns;
-			break;
-		case PR_GET_EFFECTIVE_TIMERSLACK:
-			error = task_get_effective_timer_slack(current);
-			break;
-		case PR_SET_TIMERSLACK:
-			if (arg2 <= 0)
-				current->timer_slack_ns =
-					current->default_timer_slack_ns;
-			else
-				current->timer_slack_ns = arg2;
-			break;
-		case PR_MCE_KILL:
-			if (arg4 | arg5)
-				return -EINVAL;
-			switch (arg2) {
-			case PR_MCE_KILL_CLEAR:
-				if (arg3 != 0)
-					return -EINVAL;
-				current->flags &= ~PF_MCE_PROCESS;
-				break;
-			case PR_MCE_KILL_SET:
-				current->flags |= PF_MCE_PROCESS;
-				if (arg3 == PR_MCE_KILL_EARLY)
-					current->flags |= PF_MCE_EARLY;
-				else if (arg3 == PR_MCE_KILL_LATE)
-					current->flags &= ~PF_MCE_EARLY;
-				else if (arg3 == PR_MCE_KILL_DEFAULT)
-					current->flags &=
-						~(PF_MCE_EARLY|PF_MCE_PROCESS);
-				else
-					return -EINVAL;
-				break;
-			default:
-				return -EINVAL;
-			}
-			break;
-		case PR_MCE_KILL_GET:
-			if (arg2 | arg3 | arg4 | arg5)
-				return -EINVAL;
-			if (current->flags & PF_MCE_PROCESS)
-				error = (current->flags & PF_MCE_EARLY) ?
-					PR_MCE_KILL_EARLY : PR_MCE_KILL_LATE;
-			else
-				error = PR_MCE_KILL_DEFAULT;
-			break;
-		case PR_SET_MM:
-			error = prctl_set_mm(arg2, arg3, arg4, arg5);
-			break;
-		case PR_GET_TID_ADDRESS:
-			error = prctl_get_tid_address(me, (int __user **)arg2);
-			break;
-		case PR_SET_CHILD_SUBREAPER:
-			me->signal->is_child_subreaper = !!arg2;
-			break;
-		case PR_GET_CHILD_SUBREAPER:
-			error = put_user(me->signal->is_child_subreaper,
-					 (int __user *) arg2);
-			break;
-		case PR_SET_NO_NEW_PRIVS:
-			if (arg2 != 1 || arg3 || arg4 || arg5)
-				return -EINVAL;
-
-			current->no_new_privs = 1;
-			break;
-		case PR_GET_NO_NEW_PRIVS:
-			if (arg2 || arg3 || arg4 || arg5)
-				return -EINVAL;
-			return current->no_new_privs ? 1 : 0;
-		default:
+	case PR_SET_PDEATHSIG:
+		if (!valid_signal(arg2)) {
 			error = -EINVAL;
 			break;
+		}
+		me->pdeath_signal = arg2;
+		break;
+	case PR_GET_PDEATHSIG:
+		error = put_user(me->pdeath_signal, (int __user *)arg2);
+		break;
+	case PR_GET_DUMPABLE:
+		error = get_dumpable(me->mm);
+		break;
+	case PR_SET_DUMPABLE:
+		if (arg2 != SUID_DUMP_DISABLE && arg2 != SUID_DUMP_USER) {
+			error = -EINVAL;
+			break;
+		}
+		set_dumpable(me->mm, arg2);
+		break;
+
+	case PR_SET_UNALIGN:
+		error = SET_UNALIGN_CTL(me, arg2);
+		break;
+	case PR_GET_UNALIGN:
+		error = GET_UNALIGN_CTL(me, arg2);
+		break;
+	case PR_SET_FPEMU:
+		error = SET_FPEMU_CTL(me, arg2);
+		break;
+	case PR_GET_FPEMU:
+		error = GET_FPEMU_CTL(me, arg2);
+		break;
+	case PR_SET_FPEXC:
+		error = SET_FPEXC_CTL(me, arg2);
+		break;
+	case PR_GET_FPEXC:
+		error = GET_FPEXC_CTL(me, arg2);
+		break;
+	case PR_GET_TIMING:
+		error = PR_TIMING_STATISTICAL;
+		break;
+	case PR_SET_TIMING:
+		if (arg2 != PR_TIMING_STATISTICAL)
+			error = -EINVAL;
+		break;
+	case PR_SET_NAME:
+		comm[sizeof(me->comm) - 1] = 0;
+		if (strncpy_from_user(comm, (char __user *)arg2,
+				      sizeof(me->comm) - 1) < 0)
+			return -EFAULT;
+		set_task_comm(me, comm);
+		/* proc_comm_connector(me);  need to implement!*/ 
+		break;
+	case PR_GET_NAME:
+		get_task_comm(comm, me);
+		if (copy_to_user((char __user *)arg2, comm, sizeof(comm)))
+			return -EFAULT;
+		break;
+	case PR_GET_ENDIAN:
+		error = GET_ENDIAN(me, arg2);
+		break;
+	case PR_SET_ENDIAN:
+		error = SET_ENDIAN(me, arg2);
+		break;
+	case PR_GET_SECCOMP:
+		error = prctl_get_seccomp();
+		break;
+	case PR_SET_SECCOMP:
+		error = prctl_set_seccomp(arg2, (char __user *)arg3);
+		break;
+	case PR_GET_TSC:
+		error = GET_TSC_CTL(arg2);
+		break;
+	case PR_SET_TSC:
+		error = SET_TSC_CTL(arg2);
+		break;
+	case PR_TASK_PERF_EVENTS_DISABLE:
+		error = perf_event_task_disable();
+		break;
+	case PR_TASK_PERF_EVENTS_ENABLE:
+		error = perf_event_task_enable();
+		break;
+	case PR_GET_TIMERSLACK:
+		error = current->timer_slack_ns;
+		break;
+	case PR_SET_TIMERSLACK:
+		if (arg2 <= 0)
+			current->timer_slack_ns =
+					current->default_timer_slack_ns;
+		else
+			current->timer_slack_ns = arg2;
+		break;
+	case PR_MCE_KILL:
+		if (arg4 | arg5)
+			return -EINVAL;
+		switch (arg2) {
+		case PR_MCE_KILL_CLEAR:
+			if (arg3 != 0)
+				return -EINVAL;
+			current->flags &= ~PF_MCE_PROCESS;
+			break;
+		case PR_MCE_KILL_SET:
+			current->flags |= PF_MCE_PROCESS;
+			if (arg3 == PR_MCE_KILL_EARLY)
+				current->flags |= PF_MCE_EARLY;
+			else if (arg3 == PR_MCE_KILL_LATE)
+				current->flags &= ~PF_MCE_EARLY;
+			else if (arg3 == PR_MCE_KILL_DEFAULT)
+				current->flags &=
+						~(PF_MCE_EARLY|PF_MCE_PROCESS);
+			else
+				return -EINVAL;
+			break;
+		default:
+			return -EINVAL;
+		}
+		break;
+	case PR_MCE_KILL_GET:
+		if (arg2 | arg3 | arg4 | arg5)
+			return -EINVAL;
+		if (current->flags & PF_MCE_PROCESS)
+			error = (current->flags & PF_MCE_EARLY) ?
+				PR_MCE_KILL_EARLY : PR_MCE_KILL_LATE;
+		else
+			error = PR_MCE_KILL_DEFAULT;
+		break;
+	case PR_SET_MM:
+		error = prctl_set_mm(arg2, arg3, arg4, arg5);
+		break;
+	case PR_GET_TID_ADDRESS:
+		error = prctl_get_tid_address(me, (int __user **)arg2);
+		break;
+	case PR_SET_CHILD_SUBREAPER:
+		me->signal->is_child_subreaper = !!arg2;
+		break;
+	case PR_GET_CHILD_SUBREAPER:
+		error = put_user(me->signal->is_child_subreaper,
+				 (int __user *)arg2);
+		break;
+	case PR_SET_NO_NEW_PRIVS:
+		if (arg2 != 1 || arg3 || arg4 || arg5)
+			return -EINVAL;
+
+		current->no_new_privs = 1;
+		break;
+	case PR_GET_NO_NEW_PRIVS:
+		if (arg2 || arg3 || arg4 || arg5)
+			return -EINVAL;
+		return current->no_new_privs ? 1 : 0;
+	default:
+		error = -EINVAL;
+		break;
 	}
 	return error;
 }
@@ -2195,14 +2190,8 @@ SYSCALL_DEFINE3(getcpu, unsigned __user *, cpup, unsigned __user *, nodep,
 
 char poweroff_cmd[POWEROFF_CMD_PATH_LEN] = "/sbin/poweroff";
 
-static void argv_cleanup(struct subprocess_info *info)
+static int __orderly_poweroff(bool force)
 {
-	argv_free(info->argv);
-}
-
-static int __orderly_poweroff(void)
-{
-	int argc;
 	char **argv;
 	static char *envp[] = {
 		"HOME=/",
@@ -2211,36 +2200,19 @@ static int __orderly_poweroff(void)
 	};
 	int ret;
 
-	argv = argv_split(GFP_ATOMIC, poweroff_cmd, &argc);
-	if (argv == NULL) {
-		printk(KERN_WARNING "%s failed to allocate memory for \"%s\"\n",
-		       __func__, poweroff_cmd);
-		return -ENOMEM;
-	}
-
-	ret = call_usermodehelper_fns(argv[0], argv, envp, UMH_WAIT_EXEC,
-				      NULL, argv_cleanup, NULL);
-	if (ret == -ENOMEM)
+	argv = argv_split(GFP_KERNEL, poweroff_cmd, NULL);
+	if (argv) {
+		ret = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_EXEC);
 		argv_free(argv);
-
-	return ret;
-}
-
-/**
- * orderly_poweroff - Trigger an orderly system poweroff
- * @force: force poweroff if command execution fails
- *
- * This may be called from any context to trigger a system shutdown.
- * If the orderly shutdown fails, it will force an immediate shutdown.
- */
-int orderly_poweroff(bool force)
-{
-	int ret = __orderly_poweroff();
+	} else {
+		printk(KERN_WARNING "%s failed to allocate memory for \"%s\"\n",
+					 __func__, poweroff_cmd);
+		ret = -ENOMEM;
+	}
 
 	if (ret && force) {
 		printk(KERN_WARNING "Failed to start orderly shutdown: "
-		       "forcing the issue\n");
-
+					"forcing the issue\n");
 		/*
 		 * I guess this should try to kick off some daemon to sync and
 		 * poweroff asap.  Or not even bother syncing if we're doing an
@@ -2251,5 +2223,29 @@ int orderly_poweroff(bool force)
 	}
 
 	return ret;
+}
+
+static bool poweroff_force;
+
+static void poweroff_work_func(struct work_struct *work)
+{
+	__orderly_poweroff(poweroff_force);
+}
+
+static DECLARE_WORK(poweroff_work, poweroff_work_func);
+
+/**
+ * orderly_poweroff - Trigger an orderly system poweroff
+ * @force: force poweroff if command execution fails
+ *
+ * This may be called from any context to trigger a system shutdown.
+ * If the orderly shutdown fails, it will force an immediate shutdown.
+ */
+int orderly_poweroff(bool force)
+{
+	if (force) /* do not override the pending "true" */
+		poweroff_force = true;
+	schedule_work(&poweroff_work);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(orderly_poweroff);
