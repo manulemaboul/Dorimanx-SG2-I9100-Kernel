@@ -52,6 +52,7 @@
 #include <linux/hw_breakpoint.h>
 #include <linux/oom.h>
 #include <linux/writeback.h>
+#include <linux/shm.h>
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
@@ -63,6 +64,7 @@ static void exit_mm(struct task_struct * tsk);
 static void __unhash_process(struct task_struct *p, bool group_dead)
 {
 	nr_threads--;
+	detach_pid(p, PIDTYPE_PID);
 	if (group_dead) {
 		detach_pid(p, PIDTYPE_PGID);
 		detach_pid(p, PIDTYPE_SID);
@@ -71,7 +73,6 @@ static void __unhash_process(struct task_struct *p, bool group_dead)
 		list_del_init(&p->sibling);
 		__this_cpu_dec(process_counts);
 	}
-	detach_pid(p, PIDTYPE_PID);
 	list_del_rcu(&p->thread_group);
 }
 
@@ -191,22 +192,12 @@ repeat:
 	zap_leader = 0;
 	leader = p->group_leader;
 	if (leader != p && thread_group_empty(leader) && leader->exit_state == EXIT_ZOMBIE) {
-		BUG_ON(task_detached(leader));
-		do_notify_parent(leader, leader->exit_signal);
 		/*
 		 * If we were the last child thread and the leader has
 		 * exited already, and the leader's parent ignores SIGCHLD,
 		 * then we are the one who should release the leader.
-		 *
-		 * do_notify_parent() will have marked it self-reaping in
-		 * that case.
 		 */
-		zap_leader = task_detached(leader);
-
-		/*
-		 * This maintains the invariant that release_task()
-		 * only runs on a task in EXIT_DEAD, just for sanity.
-		 */
+		zap_leader = do_notify_parent(leader, leader->exit_signal);
 		if (zap_leader)
 			leader->exit_state = EXIT_DEAD;
 	}
@@ -544,12 +535,6 @@ static struct task_struct *find_new_reaper(struct task_struct *father)
 
 		zap_pid_ns_processes(pid_ns);
 		write_lock_irq(&tasklist_lock);
-		/*
-		 * We can not clear ->child_reaper or leave it alone.
-		 * There may by stealth EXIT_DEAD tasks on ->children,
-		 * forget_original_parent() must move them somewhere.
-		 */
-		pid_ns->child_reaper = init_pid_ns.child_reaper;
 	} else if (father->signal->has_child_subreaper) {
 		struct task_struct *reaper;
 
@@ -586,7 +571,7 @@ static void reparent_leader(struct task_struct *father, struct task_struct *p,
 {
 	list_move_tail(&p->sibling, &p->real_parent->children);
 
-	if (task_detached(p))
+	if (p->exit_state == EXIT_DEAD)
 		return;
 	/*
 	 * If this is a threaded reparent there is no need to
@@ -601,8 +586,7 @@ static void reparent_leader(struct task_struct *father, struct task_struct *p,
 	/* If it has exited notify the new parent about this child's death. */
 	if (!p->ptrace &&
 	    p->exit_state == EXIT_ZOMBIE && thread_group_empty(p)) {
-		do_notify_parent(p, p->exit_signal);
-		if (task_detached(p)) {
+		if (do_notify_parent(p, p->exit_signal)) {
 			p->exit_state = EXIT_DEAD;
 			list_move_tail(&p->sibling, dead);
 		}
@@ -865,6 +849,9 @@ void do_exit(long code)
 	if (tsk->splice_pipe)
 		__free_pipe_info(tsk->splice_pipe);
 
+	if (tsk->task_frag.page)
+		put_page(tsk->task_frag.page);
+
 	validate_creds_for_do_exit(tsk);
 
 	preempt_disable();
@@ -1074,9 +1061,9 @@ static int wait_task_zombie(struct wait_opts *wo, struct task_struct *p)
 	traced = ptrace_reparented(p);
 	/*
 	 * It can be ptraced but not reparented, check
-	 * !task_detached() to filter out sub-threads.
+	 * thread_group_leader() to filter out sub-threads.
 	 */
-	if (likely(!traced) && likely(!task_detached(p))) {
+	if (likely(!traced) && thread_group_leader(p)) {
 		struct signal_struct *psig;
 		struct signal_struct *sig;
 		unsigned long maxrss;
@@ -1174,16 +1161,13 @@ static int wait_task_zombie(struct wait_opts *wo, struct task_struct *p)
 		/* We dropped tasklist, ptracer could die and untrace */
 		ptrace_unlink(p);
 		/*
-		 * If this is not a detached task, notify the parent.
-		 * If it's still not detached after that, don't release
-		 * it now.
+		 * If this is not a sub-thread, notify the parent.
+		 * If parent wants a zombie, don't release it now.
 		 */
-		if (!task_detached(p)) {
-			do_notify_parent(p, p->exit_signal);
-			if (!task_detached(p)) {
-				p->exit_state = EXIT_ZOMBIE;
-				p = NULL;
-			}
+		if (thread_group_leader(p) &&
+		    !do_notify_parent(p, p->exit_signal)) {
+			p->exit_state = EXIT_ZOMBIE;
+			p = NULL;
 		}
 		write_unlock_irq(&tasklist_lock);
 	}
@@ -1443,8 +1427,7 @@ static int wait_consider_task(struct wait_opts *wo, int ptrace,
 		 * own children, it should create a separate process which
 		 * takes the role of real parent.
 		 */
-		if (likely(!ptrace) && p->ptrace &&
-		    same_thread_group(p->parent, p->real_parent))
+		if (likely(!ptrace) && p->ptrace && !ptrace_reparented(p))
 			return 0;
 
 		/*
