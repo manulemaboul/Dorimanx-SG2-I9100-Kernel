@@ -842,8 +842,6 @@ struct mm_struct *dup_mm(struct task_struct *tsk)
 #ifdef CONFIG_NUMA_BALANCING
 	mm->first_nid = NUMA_PTE_SCAN_INIT;
 #endif
-	uprobe_reset_state(mm);
-
 	if (!mm_init(mm, tsk))
 		goto fail_nomem;
 
