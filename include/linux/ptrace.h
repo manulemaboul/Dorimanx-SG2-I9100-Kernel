@@ -1,5 +1,6 @@
 #ifndef _LINUX_PTRACE_H
 #define _LINUX_PTRACE_H
+
 /* ptrace.h */
 /* structs and defines to help the user use the ptrace system call. */
 
@@ -69,7 +70,10 @@
 #define PTRACE_O_TRACEVFORKDONE	(1 << PTRACE_EVENT_VFORK_DONE)
 #define PTRACE_O_TRACEEXIT	(1 << PTRACE_EVENT_EXIT)
 
-#define PTRACE_O_MASK		0x0000007f
+/* eventless options */
+#define PTRACE_O_EXITKILL	(1 << 20)
+
+#define PTRACE_O_MASK		(0x000000ff | PTRACE_O_EXITKILL)
 
 #include <asm/ptrace.h>
 
@@ -97,6 +101,9 @@
 #define PT_TRACE_EXEC		PT_EVENT_FLAG(PTRACE_EVENT_EXEC)
 #define PT_TRACE_VFORK_DONE	PT_EVENT_FLAG(PTRACE_EVENT_VFORK_DONE)
 #define PT_TRACE_EXIT		PT_EVENT_FLAG(PTRACE_EVENT_EXIT)
+#define PT_TRACE_SECCOMP	PT_EVENT_FLAG(PTRACE_EVENT_SECCOMP)
+
+#define PT_EXITKILL		(PTRACE_O_EXITKILL << PT_OPT_FLAG_SHIFT)
 
 /* single stepping state bits (used on ARM and PA-RISC) */
 #define PT_SINGLESTEP_BIT	31

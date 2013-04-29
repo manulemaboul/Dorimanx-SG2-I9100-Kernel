@@ -45,36 +45,6 @@ void __ptrace_link(struct task_struct *child, struct task_struct *new_parent)
 	child->parent = new_parent;
 }
 
-/* Ensure that nothing can wake it up, even SIGKILL */
-static bool ptrace_freeze_traced(struct task_struct *task)
-{
-	bool ret = false;
-
-	spin_lock_irq(&task->sighand->siglock);
-	if (task_is_traced(task) && !__fatal_signal_pending(task)) {
-		task->state = __TASK_TRACED;
-		ret = true;
-	}
-	spin_unlock_irq(&task->sighand->siglock);
-
-	return ret;
-}
-
-static void ptrace_unfreeze_traced(struct task_struct *task)
-{
-	if (task->state != __TASK_TRACED)
-		return;
-
-	WARN_ON(!task->ptrace || task->parent != current);
-
-	spin_lock_irq(&task->sighand->siglock);
-	if (__fatal_signal_pending(task))
-		wake_up_state(task, __TASK_TRACED);
-	else
-		task->state = TASK_TRACED;
-	spin_unlock_irq(&task->sighand->siglock);
-}
-
 /**
  * __ptrace_unlink - unlink ptracee and restore its execution state
  * @child: ptracee to be unlinked
@@ -150,6 +120,40 @@ void __ptrace_unlink(struct task_struct *child)
 		ptrace_signal_wake_up(child, true);
 
 	spin_unlock(&child->sighand->siglock);
+}
+
+/* Ensure that nothing can wake it up, even SIGKILL */
+static bool ptrace_freeze_traced(struct task_struct *task)
+{
+	bool ret = false;
+
+	/* Lockless, nobody but us can set this flag */
+	if (task->jobctl & JOBCTL_LISTENING)
+		return ret;
+
+	spin_lock_irq(&task->sighand->siglock);
+	if (task_is_traced(task) && !__fatal_signal_pending(task)) {
+		task->state = __TASK_TRACED;
+		ret = true;
+	}
+	spin_unlock_irq(&task->sighand->siglock);
+
+	return ret;
+}
+
+static void ptrace_unfreeze_traced(struct task_struct *task)
+{
+	if (task->state != __TASK_TRACED)
+		return;
+
+	WARN_ON(!task->ptrace || task->parent != current);
+
+	spin_lock_irq(&task->sighand->siglock);
+	if (__fatal_signal_pending(task))
+		wake_up_state(task, __TASK_TRACED);
+	else
+		task->state = TASK_TRACED;
+	spin_unlock_irq(&task->sighand->siglock);
 }
 
 /**
@@ -498,6 +502,9 @@ void exit_ptrace(struct task_struct *tracer)
 		return;
 
 	list_for_each_entry_safe(p, n, &tracer->ptraced, ptrace_entry) {
+		if (unlikely(p->ptrace & PT_EXITKILL))
+			send_sig_info(SIGKILL, SEND_SIG_FORCED, p);
+
 		if (__ptrace_detach(tracer, p))
 			list_add(&p->ptrace_entry, &ptrace_dead);
 	}
@@ -926,7 +933,8 @@ SYSCALL_DEFINE4(ptrace, long, request, long, pid, unsigned long, addr,
 		goto out_put_task_struct;
 	}
 
-	ret = ptrace_check_attach(child, request == PTRACE_KILL);
+	ret = ptrace_check_attach(child, request == PTRACE_KILL ||
+				  request == PTRACE_INTERRUPT);
 	if (ret < 0)
 		goto out_put_task_struct;
 
@@ -1070,7 +1078,8 @@ asmlinkage long compat_sys_ptrace(compat_long_t request, compat_long_t pid,
 		goto out_put_task_struct;
 	}
 
-	ret = ptrace_check_attach(child, request == PTRACE_KILL);
+	ret = ptrace_check_attach(child, request == PTRACE_KILL ||
+				  request == PTRACE_INTERRUPT);
 	if (!ret) {
 		ret = compat_arch_ptrace(child, request, addr, data);
 		if (ret || request != PTRACE_DETACH)
