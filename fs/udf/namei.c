@@ -32,8 +32,6 @@
 #include <linux/crc-itu-t.h>
 #include <linux/exportfs.h>
 
-enum { UDF_MAX_LINKS = 0xffff };
-
 static inline int udf_match(int len1, const unsigned char *name1, int len2,
 			    const unsigned char *name2)
 {
@@ -253,7 +251,7 @@ out_ok:
 }
 
 static struct dentry *udf_lookup(struct inode *dir, struct dentry *dentry,
-				 struct nameidata *nd)
+				 unsigned int flags)
 {
 	struct inode *inode = NULL;
 	struct fileIdentDesc cfi;
@@ -553,7 +551,7 @@ static int udf_delete_entry(struct inode *inode, struct fileIdentDesc *fi,
 }
 
 static int udf_create(struct inode *dir, struct dentry *dentry, umode_t mode,
-		      struct nameidata *nd)
+		      bool excl)
 {
 	struct udf_fileident_bh fibh;
 	struct inode *inode;
@@ -648,10 +646,6 @@ static int udf_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 	int err;
 	struct udf_inode_info *dinfo = UDF_I(dir);
 	struct udf_inode_info *iinfo;
-
-	err = -EMLINK;
-	if (dir->i_nlink >= UDF_MAX_LINKS)
-		goto out;
 
 	err = -EIO;
 	inode = udf_new_inode(dir, S_IFDIR | mode, &err);
@@ -796,9 +790,8 @@ static int udf_rmdir(struct inode *dir, struct dentry *dentry)
 	if (retval)
 		goto end_rmdir;
 	if (inode->i_nlink != 2)
-		udf_warning(inode->i_sb, "udf_rmdir",
-			    "empty directory has nlink != 2 (%d)",
-			    inode->i_nlink);
+		udf_warn(inode->i_sb, "empty directory has nlink != 2 (%d)\n",
+			 inode->i_nlink);
 	clear_nlink(inode);
 	inode->i_size = 0;
 	inode_dec_link_count(dir);
@@ -1033,9 +1026,6 @@ static int udf_link(struct dentry *old_dentry, struct inode *dir,
 	struct fileIdentDesc cfi, *fi;
 	int err;
 
-	if (inode->i_nlink >= UDF_MAX_LINKS)
-		return -EMLINK;
-
 	fi = udf_add_entry(dir, dentry, &fibh, &cfi, &err);
 	if (!fi) {
 		return err;
@@ -1127,10 +1117,6 @@ static int udf_rename(struct inode *old_dir, struct dentry *old_dentry,
 		if (udf_get_lb_pblock(old_inode->i_sb, &tloc, 0) !=
 				old_dir->i_ino)
 			goto end_rename;
-
-		retval = -EMLINK;
-		if (!new_inode && new_dir->i_nlink >= UDF_MAX_LINKS)
-			goto end_rename;
 	}
 	if (!nfi) {
 		nfi = udf_add_entry(new_dir, new_dentry, &nfibh, &ncfi,
@@ -1207,7 +1193,7 @@ static struct dentry *udf_get_parent(struct dentry *child)
 {
 	struct kernel_lb_addr tloc;
 	struct inode *inode = NULL;
-	struct qstr dotdot = {.name = "..", .len = 2};
+	struct qstr dotdot = QSTR_INIT("..", 2);
 	struct fileIdentDesc cfi;
 	struct udf_fileident_bh fibh;
 
