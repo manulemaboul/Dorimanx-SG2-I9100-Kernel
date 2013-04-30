@@ -248,12 +248,10 @@ void shake_page(struct page *p, int access)
 	 */
 	if (access) {
 		int nr;
-		int nid = page_to_nid(p);
 		do {
 			struct shrink_control shrink = {
 				.gfp_mask = GFP_KERNEL,
 			};
-			node_set(nid, shrink.nodes_to_scan);
 
 			nr = shrink_slab(&shrink, 1000, 1000);
 			if (page_count(p) == 1)
@@ -787,10 +785,10 @@ static struct page_state {
 	{ sc|dirty,	sc,		"clean swapcache",	me_swapcache_clean },
 
 	{ mlock|dirty,	mlock|dirty,	"dirty mlocked LRU",	me_pagecache_dirty },
-	{ mlock,	mlock,		"clean mlocked LRU",	me_pagecache_clean },
+	{ mlock|dirty,	mlock,		"clean mlocked LRU",	me_pagecache_clean },
 
 	{ unevict|dirty, unevict|dirty,	"dirty unevictable LRU", me_pagecache_dirty },
-	{ unevict,	unevict,	"clean unevictable LRU", me_pagecache_clean },
+	{ unevict|dirty, unevict,	"clean unevictable LRU", me_pagecache_clean },
 
 	{ lru|dirty,	lru|dirty,	"dirty LRU",	me_pagecache_dirty },
 	{ lru|dirty,	lru,		"clean LRU",	me_pagecache_clean },
@@ -1435,11 +1433,7 @@ static int __get_any_page(struct page *p, unsigned long pfn, int flags)
 		/* Not a free page */
 		ret = 1;
 	}
-#ifndef CONFIG_DMA_CMA
-	unset_migratetype_isolate(p);
-#else
 	unset_migratetype_isolate(p, MIGRATE_MOVABLE);
-#endif
 	unlock_memory_hotplug();
 	return ret;
 }
