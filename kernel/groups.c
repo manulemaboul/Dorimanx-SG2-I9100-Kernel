@@ -256,25 +256,27 @@ SYSCALL_DEFINE2(setgroups, int, gidsetsize, gid_t __user *, grouplist)
 /*
  * Check whether we're fsgid/egid or in the supplemental group..
  */
-int in_group_p(kgid_t grp)
+int in_group_p(gid_t grp)
 {
 	const struct cred *cred = current_cred();
 	int retval = 1;
 
-	if (!gid_eq(grp, cred->fsgid))
-		retval = groups_search(cred->group_info, grp);
+	if (grp != cred->fsgid)
+		retval = groups_search(cred->group_info,
+				       make_kgid(cred->user_ns, grp));
 	return retval;
 }
 
 EXPORT_SYMBOL(in_group_p);
 
-int in_egroup_p(kgid_t grp)
+int in_egroup_p(gid_t grp)
 {
 	const struct cred *cred = current_cred();
 	int retval = 1;
 
-	if (!gid_eq(grp, cred->egid))
-		retval = groups_search(cred->group_info, grp);
+	if (grp != cred->egid)
+		retval = groups_search(cred->group_info,
+				       make_kgid(cred->user_ns, grp));
 	return retval;
 }
 
