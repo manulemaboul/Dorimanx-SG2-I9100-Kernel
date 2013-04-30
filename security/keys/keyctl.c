@@ -46,6 +46,9 @@ static int key_get_type_from_user(char *type,
  * Extract the description of a new key from userspace and either add it as a
  * new key to the specified keyring or update a matching key in that keyring.
  *
+ * If the description is NULL or an empty string, the key type is asked to
+ * generate one from the payload.
+ *
  * The keyring must be writable so that we can attach the key to it.
  *
  * If successful, the new key's serial number is returned, otherwise an error
@@ -72,10 +75,17 @@ SYSCALL_DEFINE5(add_key, const char __user *, _type,
 	if (ret < 0)
 		goto error;
 
-	description = strndup_user(_description, PAGE_SIZE);
-	if (IS_ERR(description)) {
-		ret = PTR_ERR(description);
-		goto error;
+	description = NULL;
+	if (_description) {
+		description = strndup_user(_description, PAGE_SIZE);
+		if (IS_ERR(description)) {
+			ret = PTR_ERR(description);
+			goto error;
+		}
+		if (!*description) {
+			kfree(description);
+			description = NULL;
+		}
 	}
 
 	/* pull the payload in if one was supplied */
@@ -1497,7 +1507,6 @@ long keyctl_session_to_parent(void)
 	oldwork = NULL;
 	parent = me->real_parent;
 
-	task_lock(parent);
 	/* the parent mustn't be init and mustn't be a kernel thread */
 	if (parent->pid <= 1 || !parent->mm)
 		goto unlock;
@@ -1541,7 +1550,6 @@ long keyctl_session_to_parent(void)
 	if (!ret)
 		newwork = NULL;
 unlock:
-	task_unlock(parent);
 	write_unlock_irq(&tasklist_lock);
 	rcu_read_unlock();
 	if (oldwork)
